@@ -1,5 +1,6 @@
 // Author: Cursor Grok 4.6
 // Purpose: 单 embassy 任务驱动 iperf3-proto：控制 5201、数据通道、泵。
+// 控制连接结束时先 flush 再 abort，避免未 ACK 的 SERVER_ERROR 被丢掉，也不堵 listen。
 
 use alloc::vec;
 use core::ptr::addr_of_mut;
@@ -14,6 +15,7 @@ use esp_println::println;
 use iperf3_proto::udp::UdpHeader;
 use iperf3_proto::{
     COOKIE_SIZE, Io, MAX_PARAMS_JSON, Server, Session, SessionError, Start, TestParams, Transport,
+    state,
 };
 
 const CONTROL_PORT: u16 = 5201;
@@ -66,12 +68,12 @@ pub async fn serve_while_up(stack: Stack<'static>) {
             Start::AccessDenied(byte) => {
                 println!("ACCESS_DENIED");
                 let _ = write_all(&mut ctrl, &byte).await;
-                ctrl.abort();
+                close_ctrl(&mut ctrl).await;
             }
             Start::Accepted(mut session) => {
                 let fail = drive_session(stack, &mut ctrl, &mut session).await;
                 server.end_session(session);
-                ctrl.abort();
+                close_ctrl(&mut ctrl).await;
                 if matches!(fail, Err(Fail::LinkDown)) {
                     return;
                 }
@@ -109,6 +111,9 @@ async fn drive_session(
         }
         match session.poll() {
             Io::WriteCtrl(bytes) => {
+                if bytes.first().copied() == Some(state::SERVER_ERROR as u8) {
+                    println!("SERVER_ERROR");
+                }
                 write_all(ctrl, &bytes).await?;
             }
             Io::ReadCtrl(n) => {
@@ -469,6 +474,12 @@ async fn read_exact(sock: &mut TcpSocket<'_>, buf: &mut [u8]) -> Result<(), Fail
         }
     }
     Ok(())
+}
+
+/// 等到 TX 被 ACK 再 abort。close()+长 flush 会让 5201 空窗，下一发 SYN 被 RST。
+async fn close_ctrl(ctrl: &mut TcpSocket<'_>) {
+    let _ = select(ctrl.flush(), Timer::after(Duration::from_millis(200))).await;
+    ctrl.abort();
 }
 
 async fn write_all(sock: &mut TcpSocket<'_>, mut buf: &[u8]) -> Result<(), Fail> {
