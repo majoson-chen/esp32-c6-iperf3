@@ -1,5 +1,5 @@
 # Author: Cursor Grok 4.6
-# Purpose: no_std iperf3 protocol library crate (WP0 stub).
+# Purpose: no_std iperf3 protocol library crate (server subset).
 
 [package]
 name = "iperf3-proto"
@@ -7,3 +7,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[dependencies]
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
