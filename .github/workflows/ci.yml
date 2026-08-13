@@ -14,6 +14,6 @@ jobs:
         with:
           targets: riscv32imac-unknown-none-elf
       - name: Protocol tests
-        run: cargo test -p iperf3-proto
+        run: cargo test -p iperf3-proto --locked
       - name: Firmware release build
-        run: SSID=ci PASSWORD=ci cargo build -p firmware --release --target riscv32imac-unknown-none-elf
+        run: SSID=ci PASSWORD=ci cargo build -p firmware --release --target riscv32imac-unknown-none-elf --locked

@@ -93,7 +93,7 @@ cargo test -p iperf3-proto
 - 无 5 GHz（ESP32-C6）。
 - 无 WPA3（`esp-radio`）。请用 2.4 GHz WPA2（混合模式 AP 可以）。
 - 不做 iperf3 **client**、SoftAP、APSTA。
-- 不应 ICMP ping；合同路径是 TCP 5201。
+- 不应答 ICMP ping；合同路径是 TCP 5201。
 - 这套 Rust 栈的 Mbps **不能**对标 ESP-IDF C iperf / iperf2 官方表（协议不同、栈不同）。
 - 不做 `-P>1`、`--bidir`、IPv6、SCTP、鉴权、静态 IP、mDNS。
 
