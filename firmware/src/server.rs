@@ -15,7 +15,7 @@ use esp_println::println;
 use iperf3_proto::udp::UdpHeader;
 use iperf3_proto::{
     COOKIE_SIZE, Io, MAX_PARAMS_JSON, Server, Session, SessionError, Start, TestParams, Transport,
-    state,
+    next_udp_packet_count, state,
 };
 
 const CONTROL_PORT: u16 = 5201;
@@ -389,6 +389,7 @@ async fn pump_udp_reverse(
     let meta = (*peer).ok_or(Fail::Data)?;
     let blk = (params.blksize as usize).clamp(UdpHeader::encoded_len(params.udp_counters_64bit), DATA_BUF);
     let interval = udp_interval(params);
+    // 3.21：`++packet_count` 后再写报头，见 next_udp_packet_count。
     let mut seq = 0u64;
     let mut next = Instant::now();
     loop {
@@ -417,12 +418,11 @@ async fn pump_udp_reverse(
                 let hdr = UdpHeader {
                     sec: (now / 1_000_000) as u32,
                     usec: (now % 1_000_000) as u32,
-                    packet_count: seq,
+                    packet_count: next_udp_packet_count(&mut seq),
                 };
                 let _ = hdr.encode(params.udp_counters_64bit, &mut buf[..n]);
                 udp.send_to(&buf[..n], meta).await.map_err(|_| Fail::Data)?;
                 session.add_bytes(n as u64);
-                seq = seq.saturating_add(1);
                 next += interval;
                 if next < Instant::now() {
                     next = Instant::now();

@@ -62,6 +62,12 @@ impl UdpHeader {
     }
 }
 
+/// iperf 3.21 `iperf_udp.c`：`++packet_count` 后再写入报头；计数从 0 起，首包序号为 1。
+pub fn next_udp_packet_count(seq: &mut u64) -> u64 {
+    *seq = seq.saturating_add(1);
+    *seq
+}
+
 pub fn is_udp_connect_msg(buf: &[u8]) -> bool {
     buf.len() >= 4 && buf[..4] == UDP_CONNECT_MSG
 }

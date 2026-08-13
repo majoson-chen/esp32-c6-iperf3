@@ -24,7 +24,7 @@ pub use results::{StreamStats, encode_results_json};
 pub use session::{IEPROTOCOL, IERECVPARAMS, Io, Server, Session, SessionError, Start};
 pub use udp::{
     LEGACY_UDP_CONNECT_REPLY, UDP_CONNECT_MSG, UDP_CONNECT_REPLY, UdpError, UdpHeader,
-    is_udp_connect_msg,
+    is_udp_connect_msg, next_udp_packet_count,
 };
 
 /// 占位版本串。
@@ -163,6 +163,21 @@ mod tests {
         );
         let d64 = UdpHeader::decode(true, &buf64).unwrap();
         assert_eq!(d64, h);
+    }
+
+    #[test]
+    fn udp_send_seq_starts_at_one_like_iperf_3_21() {
+        // 3.21 iperf_udp.c：`++packet_count` 后再写入报头，首包序号为 1。
+        let mut seq = 0u64;
+        let hdr = UdpHeader {
+            sec: 0,
+            usec: 0,
+            packet_count: next_udp_packet_count(&mut seq),
+        };
+        let mut buf = [0u8; 12];
+        hdr.encode(false, &mut buf).unwrap();
+        assert_eq!(UdpHeader::decode(false, &buf).unwrap().packet_count, 1);
+        assert_eq!(next_udp_packet_count(&mut seq), 2);
     }
 
     #[test]
