@@ -1,0 +1,19 @@
+# Author: Cursor Grok 4.6
+# Purpose: push/PR CI — host proto tests and dummy-SSID C6 firmware release build. No hardware.
+
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imac-unknown-none-elf
+      - name: Protocol tests
+        run: cargo test -p iperf3-proto
+      - name: Firmware release build
+        run: SSID=ci PASSWORD=ci cargo build -p firmware --release --target riscv32imac-unknown-none-elf
