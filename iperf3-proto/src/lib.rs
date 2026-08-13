@@ -208,7 +208,8 @@ mod tests {
     #[test]
     fn busy_server_returns_access_denied() {
         let mut server = Server::new();
-        let Start::Accepted(_) = server.start_session() else {
+        // 必须持有会话：drop 最后一轮 Session 会清 busy。
+        let Start::Accepted(_held) = server.start_session() else {
             panic!("first session should be accepted");
         };
         match server.start_session() {
@@ -217,6 +218,31 @@ mod tests {
             }
             Start::Accepted(_) => panic!("overlapping session must be denied"),
         }
+    }
+
+    #[test]
+    fn dropping_last_session_clears_busy() {
+        let mut server = Server::new();
+        {
+            let Start::Accepted(_s) = server.start_session() else {
+                panic!("expected session");
+            };
+            assert!(server.is_busy());
+        }
+        assert!(!server.is_busy());
+        assert!(matches!(server.start_session(), Start::Accepted(_)));
+    }
+
+    #[test]
+    fn end_session_clears_busy() {
+        let mut server = Server::new();
+        let Start::Accepted(s) = server.start_session() else {
+            panic!("expected session");
+        };
+        assert!(server.is_busy());
+        server.end_session(s);
+        assert!(!server.is_busy());
+        assert!(matches!(server.start_session(), Start::Accepted(_)));
     }
 
     #[test]
@@ -284,22 +310,30 @@ mod tests {
         assert!(matches!(server.start_session(), Start::Accepted(_)));
     }
 
-    #[test]
-    fn rejected_params_send_server_error() {
+    fn assert_reject_sends_ieprotocol(params: &[u8]) {
         let mut server = Server::new();
         let Start::Accepted(mut s) = server.start_session() else {
             panic!("expected session");
         };
         s.feed_ctrl(&[b'C'; COOKIE_SIZE]).unwrap();
         let _ = drain_writes(&mut s);
-        let params = br#"{"tcp":true,"parallel":2}"#;
         let frame = encode_json_frame(params);
         s.feed_ctrl(&frame[..4]).unwrap();
         s.feed_ctrl(params).unwrap();
         let wire = drain_writes(&mut s);
-        assert_eq!(wire[0], state::SERVER_ERROR as u8);
-        assert_eq!(wire.len(), 1 + 8);
+        // SERVER_ERROR(-2) + BE i32 IEPROTOCOL(131) + BE i32 errno(0)
+        assert_eq!(wire.len(), 9);
+        assert_eq!(wire[0] as i8, state::SERVER_ERROR);
+        assert_eq!(&wire[1..5], &IEPROTOCOL.to_be_bytes());
+        assert_eq!(&wire[5..9], &0i32.to_be_bytes());
         assert_eq!(s.poll(), Io::Done);
+    }
+
+    #[test]
+    fn rejected_params_send_server_error() {
+        assert_reject_sends_ieprotocol(br#"{"tcp":true,"parallel":2}"#);
+        assert_reject_sends_ieprotocol(br#"{"sctp":true}"#);
+        assert_reject_sends_ieprotocol(br#"{"tcp":true,"bidirectional":true}"#);
     }
 
     #[test]

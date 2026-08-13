@@ -1,7 +1,9 @@
 // Author: Cursor Grok 4.6
 // Purpose: iperf3 server 子集控制状态机：字节进、Io 命令出，不碰 socket。
 
+use alloc::rc::Rc;
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use crate::COOKIE_SIZE;
 use crate::frame::{MAX_PARAMS_JSON, decode_json_len, encode_json_frame};
@@ -44,8 +46,13 @@ pub enum Start {
     AccessDenied([u8; 1]),
 }
 
+/// 一次只服务一个测试的服务器。
+///
+/// 漏掉 `end_session` 且把 `Session` `mem::forget` 掉时，busy 永不清除，
+/// 之后每次 `start_session` 都返回 `ACCESS_DENIED`。正常 drop 最后一轮
+/// `Session`（或调用 `end_session`）会清 busy。
 pub struct Server {
-    busy: bool,
+    busy: Rc<Cell<bool>>,
 }
 
 impl Default for Server {
@@ -56,23 +63,31 @@ impl Default for Server {
 
 impl Server {
     pub fn new() -> Self {
-        Self { busy: false }
+        Self {
+            busy: Rc::new(Cell::new(false)),
+        }
     }
 
     pub fn is_busy(&self) -> bool {
-        self.busy
+        self.busy.get()
     }
 
+    /// 开始一轮测试。已 busy 时返回 `ACCESS_DENIED`（0xFF）一字节。
     pub fn start_session(&mut self) -> Start {
-        if self.busy {
+        if self.busy.get() {
             return Start::AccessDenied([state::ACCESS_DENIED as u8]);
         }
-        self.busy = true;
-        Start::Accepted(Session::new())
+        self.busy.set(true);
+        Start::Accepted(Session::new(Rc::clone(&self.busy)))
     }
 
-    pub fn end_session(&mut self, _session: Session) {
-        self.busy = false;
+    /// 结束本轮并清除 busy，随后可再 `start_session`。
+    ///
+    /// 消耗 `Session`（其 `Drop` 同样清 busy）。若既不调用本方法、也不 drop
+    /// 会话（例如 `mem::forget`），server 会永远对后续连接发 `ACCESS_DENIED`。
+    pub fn end_session(&mut self, session: Session) {
+        drop(session);
+        self.busy.set(false);
     }
 }
 
@@ -89,6 +104,9 @@ enum Phase {
     Done,
 }
 
+/// 一轮控制会话。drop 最后持有者会清除 `Server` busy。
+///
+/// `poll` / `feed_ctrl` 语义不变；busy 只通过 `end_session` 或本类型 `Drop` 释放。
 #[derive(Debug)]
 pub struct Session {
     phase: Phase,
@@ -96,16 +114,18 @@ pub struct Session {
     cookie: [u8; COOKIE_SIZE],
     params: Option<TestParams>,
     stats: StreamStats,
+    busy: Rc<Cell<bool>>,
 }
 
 impl Session {
-    fn new() -> Self {
+    fn new(busy: Rc<Cell<bool>>) -> Self {
         Self {
             phase: Phase::WaitCookie,
             out: Vec::new(),
             cookie: [0; COOKIE_SIZE],
             params: None,
             stats: StreamStats::default(),
+            busy,
         }
     }
 
@@ -284,6 +304,12 @@ impl Session {
         self.out.push(state::SERVER_ERROR as u8);
         self.out.extend_from_slice(&code.to_be_bytes());
         self.out.extend_from_slice(&0i32.to_be_bytes());
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.busy.set(false);
     }
 }
 

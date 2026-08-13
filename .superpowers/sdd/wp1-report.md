@@ -45,7 +45,7 @@ Doc-tests iperf3_proto: 0 tests
 ```
 Server::new()
   start_session() -> Start::Accepted(Session) | Start::AccessDenied([u8;1])
-  end_session(session)   // Done 或出错后必须调用，否则 busy 永不清除
+  end_session(session)   // 消耗 Session；Drop 同样清 busy。forget 会话则永远 ACCESS_DENIED
   is_busy()
 
 Session
@@ -114,7 +114,7 @@ state::*  （PARAM_EXCHANGE=9 … ACCESS_DENIED=-1, SERVER_ERROR=-2）
 
 **Concerns（非阻塞，WP2 必须看见）**
 
-1. **`end_session` 是 busy 的唯一释放口。** `Session` drop 不会清 `Server.busy`。漏调会导致永远 `ACCESS_DENIED`。`SERVER_ERROR` / `Done` 之后固件都要调。
+1. **busy 释放：** `end_session` 或 drop 最后一轮 `Session` 都会清 busy。`mem::forget` 会话仍会永远 `ACCESS_DENIED`。固件在 `SERVER_ERROR` / `Done` 后仍应显式 `end_session`。
 2. **`IEPROTOCOL`（131）用于 `-P 2` / bidir / sctp。** 桌面 client 会打印 “Protocol does not exist”，语义略歪，但不影响拒绝且不崩溃。
 3. **`serde_json` + `alloc` 会进固件镜像。** 对 C6 flash 通常可接受；若 WP2 体积紧张再换成手写扫描，公开 `TestParams::parse_json` 形状不变。
 4. **jitter 固定 0。** `note_udp_datagram` 只做序号/丢失，没做 RFC 1889。吞吐权威在 client，可接受。
@@ -135,3 +135,46 @@ state::*  （PARAM_EXCHANGE=9 … ACCESS_DENIED=-1, SERVER_ERROR=-2）
 - `iperf3-proto/src/lib.rs`（公开面 + 单测）
 - `iperf3-proto/src/{state,frame,params,udp,results,session}.rs`（新）
 - `.superpowers/sdd/wp1-report.md`（本文件）
+
+## Important review fix（2026-08-14）
+
+修正两项 Important：
+
+1. **busy / `end_session`：** `Session` 持有 `Rc<Cell<bool>>`，`Drop` 清 busy（`poll` 语义不变）。rustdoc 写明：既不 `end_session` 也不 drop（`mem::forget`）→ 永远 `ACCESS_DENIED`。
+2. **`SERVER_ERROR` 载荷：** `-P 2` / sctp / bidir 拒绝后断言首字节 `-2`，随后两个 BE i32：`IEPROTOCOL=131`、errno `0`。
+
+覆盖测试：`rejected_params_send_server_error`、`dropping_last_session_clears_busy`、`end_session_clears_busy`、`busy_server_returns_access_denied`（持有会话时重叠仍拒绝）。
+
+TDD：`dropping_last_session_clears_busy` RED = `assertion failed: !server.is_busy()`；实现 Drop 后 GREEN。payload 断言锁已有线格式（先写断言，实现未改 `queue_server_error`）。
+
+### `cargo test -p iperf3-proto`
+
+```
+running 19 tests
+test tests::cookie_is_37_bytes ... ok
+test tests::dropping_last_session_clears_busy ... ok
+test tests::busy_server_returns_access_denied ... ok
+test tests::cookie_feed_rejects_wrong_length ... ok
+test tests::json_frame_is_be_length_then_utf8 ... ok
+test tests::end_session_clears_busy ... ok
+test tests::data_cookie_mismatch_is_error ... ok
+test tests::happy_tcp_control_state_order ... ok
+test tests::params_accept_default_tcp ... ok
+test tests::params_accept_udp_reverse_and_64bit ... ok
+test tests::params_ignore_omit_window_mss_nodelay ... ok
+test tests::params_reject_sctp_parallel_bidir ... ok
+test tests::proto_version_is_nonempty ... ok
+test tests::rejected_params_send_server_error ... ok
+test tests::result_json_has_required_3_21_fields ... ok
+test tests::state_bytes_match_iperf_3_21 ... ok
+test tests::udp_header_roundtrip_32bit_and_64bit ... ok
+test tests::udp_connect_constants_are_3_21_wire_bytes ... ok
+test tests::udp_params_need_udp_channel_and_connect_reply ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests iperf3_proto
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`cargo clippy -p iperf3-proto --all-targets -- -D warnings`：通过。
