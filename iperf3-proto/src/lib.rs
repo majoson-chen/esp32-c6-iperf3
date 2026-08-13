@@ -310,6 +310,36 @@ mod tests {
         assert!(matches!(server.start_session(), Start::Accepted(_)));
     }
 
+    /// reverse 到时若先 `end_test()`，会排队 EXCHANGE_RESULTS 并改读 4 字节 JSON 长度；
+    /// client 随后的 TEST_END（1 字节 0x04）会被当成长度前缀。固件必须先等 TEST_END。
+    #[test]
+    fn end_test_then_test_end_byte_is_not_json_length() {
+        let mut server = Server::new();
+        let Start::Accepted(mut s) = server.start_session() else {
+            panic!("expected session");
+        };
+        let cookie = [b'C'; COOKIE_SIZE];
+        s.feed_ctrl(&cookie).unwrap();
+        let _ = drain_writes(&mut s);
+        let params = br#"{"tcp":true,"time":10,"parallel":1,"reverse":true}"#;
+        let frame = encode_json_frame(params);
+        s.feed_ctrl(&frame[..4]).unwrap();
+        s.feed_ctrl(params).unwrap();
+        let _ = drain_writes(&mut s);
+        let _ = s.poll();
+        s.data_ready(&cookie).unwrap();
+        let _ = drain_writes(&mut s);
+        assert_eq!(s.poll(), Io::Pump);
+
+        s.end_test().unwrap();
+        assert_eq!(drain_writes(&mut s), [state::EXCHANGE_RESULTS as u8]);
+        assert_eq!(s.poll(), Io::ReadCtrl(4));
+        assert_eq!(
+            s.feed_ctrl(&[state::TEST_END as u8]),
+            Err(SessionError::Frame)
+        );
+    }
+
     fn assert_reject_sends_ieprotocol(params: &[u8]) {
         let mut server = Server::new();
         let Start::Accepted(mut s) = server.start_session() else {

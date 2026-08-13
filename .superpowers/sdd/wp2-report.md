@@ -104,6 +104,47 @@ Doc-tests iperf3_proto: 0 tests
 4. **测中第二 listen 与数据口同 5201** 在 smoltcp 上不好做；这是 embassy-net「listen+accept 共用一颗 socket」的模型限制，不是漏写 `Start::AccessDenied` 分支（accept 后若仍 busy 会写那一字节）。
 5. **未与桌面 iperf3 对打**（WP3）。
 
+## Important-fix follow-up（P1 teardown + P2 handshake）
+
+**Date:** 2026-08-14
+
+Reverse/UDP-reverse duration 到点不再调用 `session.end_test()`（会先排队 `EXCHANGE_RESULTS`，client 的 `TEST_END` `0x04` 被当成 4 字节 JSON 长度）。改为停发/停写，再在控制面 `feed_ctrl(&[4])`。TCP 正向数据 EOF 同样只停 `add_bytes`，等控制 `TEST_END`。
+
+握手期 `join(accept, write)`、数据 cookie `read_exact`、UDP `recv_from` 与控制面一样 `select(..., wait_config_down)`；断线 abort/drop socket，`serve_while_up` 返回后 main 再等 DHCP。
+
+未改 5201 双 listen ACCESS_DENIED（已知残留：测中第二路连不上；`-P 2` 仍走同连接 `SERVER_ERROR`）。未升泵缓冲。
+
+### Teardown 锚点
+
+- 公共等待：`firmware/src/server.rs:445` `wait_ctrl_test_end`（`feed_ctrl` TEST_END，不 `end_test()`）
+- TCP reverse 停写后：`firmware/src/server.rs:343`
+- UDP reverse 停发后：`firmware/src/server.rs:429`
+- TCP forward 数据 EOF：`firmware/src/server.rs:302`
+- 握手 abort：TCP join `:180`、cookie `:192`、UDP recv `:225`
+
+协议合同单测（调用 `end_test()` 后再喂 1 字节 TEST_END → `SessionError::Frame`）：`iperf3-proto` `end_test_then_test_end_byte_is_not_json_length`。
+
+### `SSID=x PASSWORD=x cargo build -p firmware --release --target riscv32imac-unknown-none-elf`
+
+```
+   Compiling iperf3-proto v0.1.0 (/Users/majoson/CodeSpace/esp32-c6-iperf3/iperf3-proto)
+   Compiling firmware v0.1.0 (/Users/majoson/CodeSpace/esp32-c6-iperf3/firmware)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4.55s
+```
+
+exit 0。
+
+### `cargo test -p iperf3-proto`
+
+```
+running 20 tests
+test tests::end_test_then_test_end_byte_is_not_json_length ... ok
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Doc-tests iperf3_proto: 0 tests
+```
+
+exit 0。未烧录、未 push。
+
 ## Out of scope（故意不做）
 
 - 烧录 / 硬件合同命令 / `docs/hardware-test.md`（WP3）
@@ -117,3 +158,4 @@ Doc-tests iperf3_proto: 0 tests
 - `Cargo.toml`（`[profile.release]`）
 - `Cargo.lock`
 - `.superpowers/sdd/wp2-report.md`（本文件）
+- Important-fix：`firmware/src/server.rs`、`iperf3-proto/src/lib.rs`（合同单测）

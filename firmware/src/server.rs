@@ -176,11 +176,27 @@ async fn open_data_before_create_streams(
             data.set_nagle_enabled(false);
             let write_cs = write_create_streams(ctrl, session);
             // listen-before-CREATE_STREAMS：左操作数先 poll → smoltcp LISTEN，再写 0x0A。
-            let (acc, wr) = join(data.accept(CONTROL_PORT), write_cs).await;
+            // 握手期断线：取消 accept/write，丢掉数据 socket，外层重试。
+            let (acc, wr) = match select(join(data.accept(CONTROL_PORT), write_cs), stack.wait_config_down())
+                .await
+            {
+                Either::Second(()) => {
+                    data.abort();
+                    return Err(Fail::LinkDown);
+                }
+                Either::First(pair) => pair,
+            };
             wr?;
             acc.map_err(|_| Fail::Data)?;
             let mut cookie = [0u8; COOKIE_SIZE];
-            read_exact(&mut data, &mut cookie).await.map_err(|_| Fail::Data)?;
+            match select(read_exact(&mut data, &mut cookie), stack.wait_config_down()).await {
+                Either::Second(()) => {
+                    data.abort();
+                    return Err(Fail::LinkDown);
+                }
+                Either::First(Err(_)) => return Err(Fail::Data),
+                Either::First(Ok(())) => {}
+            }
             match session.data_ready(&cookie) {
                 Ok(()) => {}
                 Err(SessionError::CookieMismatch) => {
@@ -206,7 +222,10 @@ async fn open_data_before_create_streams(
             udp.bind(CONTROL_PORT).map_err(|_| Fail::Data)?;
             write_create_streams(ctrl, session).await?;
             let buf = unsafe { &mut *addr_of_mut!(PUMP_BUF) };
-            let (n, meta) = udp.recv_from(buf).await.map_err(|_| Fail::Data)?;
+            let (n, meta) = match select(udp.recv_from(buf), stack.wait_config_down()).await {
+                Either::Second(()) => return Err(Fail::LinkDown),
+                Either::First(r) => r.map_err(|_| Fail::Data)?,
+            };
             let reply = session.udp_connect_reply(&buf[..n]).map_err(Fail::Proto)?;
             udp.send_to(&reply, meta).await.map_err(|_| Fail::Data)?;
             let cookie = *session.cookie();
@@ -279,8 +298,8 @@ async fn pump_tcp_forward(
             }
             Either3::First(Err(e)) => return Err(e),
             Either3::Second(Ok(0)) => {
-                session.end_test().map_err(Fail::Proto)?;
-                return Ok(());
+                // 数据 EOF：停计数，等控制面 TEST_END；不得 end_test()。
+                return wait_ctrl_test_end(stack, ctrl, session, end_byte).await;
             }
             Either3::Second(Ok(n)) => session.add_bytes(n as u64),
             Either3::Second(Err(_)) => return Err(Fail::Data),
@@ -300,8 +319,7 @@ async fn pump_tcp_reverse(
     buf.fill(0x61);
     loop {
         if Instant::now() >= deadline {
-            session.end_test().map_err(Fail::Proto)?;
-            return Ok(());
+            break;
         }
         match select3(
             read_exact_one(ctrl, end_byte),
@@ -318,12 +336,11 @@ async fn pump_tcp_reverse(
             Either3::Second(Ok(n)) => session.add_bytes(n as u64),
             Either3::Second(Err(_)) => return Err(Fail::Data),
             Either3::Third(Either::First(())) => return Err(Fail::LinkDown),
-            Either3::Third(Either::Second(())) => {
-                session.end_test().map_err(Fail::Proto)?;
-                return Ok(());
-            }
+            Either3::Third(Either::Second(())) => break,
         }
     }
+    // duration 到：停写，等 client TEST_END；不得 end_test()。
+    wait_ctrl_test_end(stack, ctrl, session, end_byte).await
 }
 
 async fn pump_udp_forward(
@@ -371,8 +388,7 @@ async fn pump_udp_reverse(
     let mut next = Instant::now();
     loop {
         if Instant::now() >= deadline {
-            session.end_test().map_err(Fail::Proto)?;
-            return Ok(());
+            break;
         }
         match select3(
             read_exact_one(ctrl, end_byte),
@@ -387,10 +403,7 @@ async fn pump_udp_reverse(
             }
             Either3::First(Err(e)) => return Err(e),
             Either3::Third(Either::First(())) => return Err(Fail::LinkDown),
-            Either3::Third(Either::Second(())) => {
-                session.end_test().map_err(Fail::Proto)?;
-                return Ok(());
-            }
+            Either3::Third(Either::Second(())) => break,
             Either3::Second(()) => {
                 let buf = unsafe { &mut *addr_of_mut!(PUMP_BUF) };
                 let n = blk.min(buf.len());
@@ -412,6 +425,8 @@ async fn pump_udp_reverse(
             }
         }
     }
+    // duration 到：停发，等 client TEST_END；不得 end_test()。
+    wait_ctrl_test_end(stack, ctrl, session, end_byte).await
 }
 
 fn udp_interval(params: TestParams) -> Duration {
@@ -424,6 +439,20 @@ fn udp_interval(params: TestParams) -> Duration {
         .unwrap_or(1)
         .max(1);
     Duration::from_micros(us)
+}
+
+/// 停泵后读控制面 TEST_END（0x04）再 `feed_ctrl`。deadline/EOF 不得调用 `end_test()`。
+async fn wait_ctrl_test_end(
+    stack: Stack<'static>,
+    ctrl: &mut TcpSocket<'_>,
+    session: &mut Session,
+    end_byte: &mut [u8; 1],
+) -> Result<(), Fail> {
+    match select(read_exact_one(ctrl, end_byte), stack.wait_config_down()).await {
+        Either::Second(()) => Err(Fail::LinkDown),
+        Either::First(Ok(())) => session.feed_ctrl(end_byte).map_err(Fail::Proto),
+        Either::First(Err(e)) => Err(e),
+    }
 }
 
 async fn read_exact_one(sock: &mut TcpSocket<'_>, byte: &mut [u8; 1]) -> Result<(), Fail> {
