@@ -1,5 +1,5 @@
 # Author: Cursor Grok 4.6
-# Purpose: ESP32-C6 firmware binary crate stub (Wi-Fi/iperf in WP2).
+# Purpose: ESP32-C6 STA firmware; crates.io pin matches esp-hal 1.1.x embassy_dhcp.
 
 [package]
 name = "firmware"
@@ -8,3 +8,28 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+
+[dependencies]
+iperf3-proto = { path = "../iperf3-proto" }
+
+embassy-executor = "0.10.0"
+embassy-futures = "0.1"
+embassy-net = { version = "0.9.0", features = [
+    "tcp",
+    "udp",
+    "dhcpv4",
+    "medium-ethernet",
+] }
+embassy-time = "0.5.0"
+esp-alloc = "0.10.0"
+esp-backtrace = { version = "0.19.0", features = [
+    "esp32c6",
+    "panic-handler",
+    "println",
+] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"] }
+esp-hal = { version = "1.1.2", features = ["esp32c6", "unstable"] }
+esp-println = { version = "0.17.0", features = ["esp32c6"] }
+esp-radio = { version = "0.18.0", features = ["esp32c6", "wifi", "unstable"] }
+esp-rtos = { version = "0.3.0", features = ["esp32c6", "esp-radio", "embassy"] }
+static_cell = "2.1.0"

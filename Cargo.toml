@@ -10,3 +10,10 @@ resolver = "2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/majoson-chen/esp32-c6-iperf3"
+
+# Wi‑Fi 文档：过低 opt 可能关联失败。固件 release 交叉编译走这条。
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = 2

@@ -1,0 +1,11 @@
+# Author: Cursor Grok 4.6
+# Purpose: RISC-V 交叉编译 rustflags / runner；不设默认 target，以免 host 上 cargo test 被带跑。
+
+[target.riscv32imac-unknown-none-elf]
+runner = "espflash flash --monitor --chip esp32c6"
+rustflags = [
+    # esp-hal 把 linkall.x 拷到 OUT_DIR；必须显式选用，否则缺栈/内存符号。
+    "-C", "link-arg=-Tlinkall.x",
+    # esp-backtrace 需要帧指针才能打出可读栈。
+    "-C", "force-frame-pointers",
+]
