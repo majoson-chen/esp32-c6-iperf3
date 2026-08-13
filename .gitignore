@@ -1,0 +1,9 @@
+# Author: Cursor Grok 4.6
+# Purpose: ignore build artifacts, editor files, and local secrets.
+
+target/
+.env
+*.pyc
+.idea/
+.vscode/
+Thumbs.db

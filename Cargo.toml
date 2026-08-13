@@ -1,0 +1,12 @@
+# Author: Cursor Grok 4.6
+# Purpose: Cargo workspace root for iperf3-proto and firmware.
+
+[workspace]
+members = ["iperf3-proto", "firmware"]
+default-members = ["iperf3-proto"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/majoson-chen/esp32-c6-iperf3"

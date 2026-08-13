@@ -1,0 +1,6 @@
+# Author: Cursor Grok 4.6
+# Purpose: pin stable rustc and the ESP32-C6 RISC-V target.
+
+[toolchain]
+channel = "stable"
+targets = ["riscv32imac-unknown-none-elf"]
