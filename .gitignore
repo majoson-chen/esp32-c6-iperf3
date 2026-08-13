@@ -3,6 +3,7 @@
 
 target/
 .env
+.superpowers/
 *.pyc
 .idea/
 .vscode/

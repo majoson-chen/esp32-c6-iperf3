@@ -4,9 +4,11 @@
 [package]
 name = "firmware"
 version = "0.1.0"
+description = "ESP32-C6 STA firmware: iperf3 server subset on TCP 5201"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+authors.workspace = true
 publish = false
 
 [dependencies]

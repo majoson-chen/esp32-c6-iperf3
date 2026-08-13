@@ -4,9 +4,11 @@
 [package]
 name = "iperf3-proto"
 version = "0.1.0"
+description = "no_std iperf3 3.x server-subset protocol library"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
